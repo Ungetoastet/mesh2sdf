@@ -6,6 +6,7 @@ layout(local_size_x = 64) in;
 
 uniform uint textureSize; 
 uniform uint topologyLength;
+uniform mat4 model;
 
 // MESH DATA
 uniform mat2x3 boundingBox;
@@ -137,9 +138,9 @@ void main()
         return;
 
     // Fetch triangle
-    vec3 v0 = vertices[topology[faceID*3+0u]].xyz;
-    vec3 v1 = vertices[topology[faceID*3+1u]].xyz;
-    vec3 v2 = vertices[topology[faceID*3+2u]].xyz;
+    vec3 v0 = (model*vertices[topology[faceID*3+0u]]).xyz;
+    vec3 v1 = (model*vertices[topology[faceID*3+1u]]).xyz;
+    vec3 v2 = (model*vertices[topology[faceID*3+2u]]).xyz;
 
     ivec3 va = pointToVoxel(v0);
     ivec3 vb = pointToVoxel(v1);

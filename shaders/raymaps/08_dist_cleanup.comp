@@ -18,7 +18,7 @@ layout(std430, binding = 2) readonly buffer TopologyBuffer {
 };
 
 uniform int textureSize;
-
+uniform mat4 model;
 uniform mat2x3 boundingBox;
 
 vec3 voxelCenterWS(ivec3 v) {
@@ -84,9 +84,9 @@ void main() {
     uint ib = topology[topoIndex + 1u];
     uint ic = topology[topoIndex + 2u];
 
-    vec3 a = vertices[ia].xyz;
-    vec3 b = vertices[ib].xyz;
-    vec3 c = vertices[ic].xyz;
+    vec3 a = (model*vertices[ia]).xyz;
+    vec3 b = (model*vertices[ib]).xyz;
+    vec3 c = (model*vertices[ic]).xyz;
 
     vec3 point = closestPointOnTriangle(pWS, a, b, c);
 

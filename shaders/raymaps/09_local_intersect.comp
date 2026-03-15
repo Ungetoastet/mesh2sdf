@@ -6,6 +6,7 @@ uniform uint textureSize;
 uniform mat2x3 boundingBox;
 uniform ivec3 offset;
 uniform vec3 voxelSize;
+uniform mat4 model;
 
 layout(std430, binding = 1) readonly buffer VertexBuffer {
     vec4 vertices[];
@@ -92,9 +93,9 @@ void main() {
         for (uint i = startIndex; i < endIndex; i++) {
             uint faceIdx = indices[i]; 
             
-            vec3 a = vertices[topology[faceIdx * 3 + 0]].xyz;
-            vec3 b = vertices[topology[faceIdx * 3 + 1]].xyz;
-            vec3 c = vertices[topology[faceIdx * 3 + 2]].xyz;
+            vec3 a = (model*vertices[topology[faceIdx * 3 + 0]]).xyz;
+            vec3 b = (model*vertices[topology[faceIdx * 3 + 1]]).xyz;
+            vec3 c = (model*vertices[topology[faceIdx * 3 + 2]]).xyz;
 
             float hitDist;
             int intersect = intersectTriangle(pWS, dir, a, b, c, hitDist);

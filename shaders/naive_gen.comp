@@ -12,6 +12,8 @@ uniform uint topologyIndexEnd;
 
 uniform uint topologyLength;
 
+uniform mat4 model;
+
 // MESH DATA
 uniform mat2x3 boundingBox;
 layout(std430, binding=1) readonly buffer VertexBuffer {
@@ -142,9 +144,9 @@ void main()
         uint ic = topology[i + 2u];
 
         face f;
-        f.a = vertices[ia].xyz;
-        f.b = vertices[ib].xyz;
-        f.c = vertices[ic].xyz;
+        f.a = (model*vertices[ia]).xyz;
+        f.b = (model*vertices[ib]).xyz;
+        f.c = (model*vertices[ic]).xyz;
 
         vec3 pof;
         float d = distanceToFace(worldPos, f, pof);

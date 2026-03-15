@@ -1,0 +1,44 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+uniform vec3 spawnCube;   // half-size: e.g., (10, 10, 10) means a 20x20x20 cube
+uniform uint particleCount;
+
+struct particle {
+    vec3 position;
+    vec3 speed;
+    float lastTouch;
+};
+
+layout(std430, binding = 0) buffer ParticleBuffer {
+    particle particles[];
+};
+
+void main() {
+    // 1. Calculate a unique linear index for the buffer
+    uint index = gl_GlobalInvocationID.x + 
+                 gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * gl_WorkGroupSize.x) + 
+                 gl_GlobalInvocationID.z * (gl_NumWorkGroups.x * gl_WorkGroupSize.x * gl_NumWorkGroups.y * gl_WorkGroupSize.y);
+
+    if (index >= particleCount) return;
+
+    // 2. Determine how many particles exist per dimension (assuming a cube)
+    // For a perfect grid, we find the cube root of the count
+    float side = ceil(pow(float(particleCount), 1.0/3.0));
+    
+    // 3. Extract 3D grid coordinates from the linear index
+    uint iz = index / uint(side * side);
+    uint iy = (index % uint(side * side)) / uint(side);
+    uint ix = index % uint(side);
+
+    // 4. Map the grid [0, side-1] to the world range [-spawnCube, spawnCube]
+    // We use a 0.5 offset so particles aren't stuck exactly on the faces
+    vec3 steps = vec3(ix, iy, iz) / (side - 1.0); // range 0.0 to 1.0
+    vec3 pos = mix(-spawnCube, spawnCube, steps);
+
+    // 5. Initialize
+    particles[index].position = pos;
+    particles[index].speed = vec3(0.0);
+    particles[index].lastTouch = 1e10;
+}

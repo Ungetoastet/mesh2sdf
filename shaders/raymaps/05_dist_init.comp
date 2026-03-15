@@ -4,6 +4,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 uniform uint textureSize; 
 uniform mat2x3 boundingBox;
+uniform mat4 model;
 
 layout(std430, binding=0) buffer IntersectBuffer {
     uint accIntersects[];
@@ -70,9 +71,9 @@ void main() {
     for (uint i = startIndex; i < endIndex; i++) {
         uint faceIdx = indices[i]; 
         
-        vec3 a = vertices[topology[faceIdx * 3 + 0]].xyz;
-        vec3 b = vertices[topology[faceIdx * 3 + 1]].xyz;
-        vec3 c = vertices[topology[faceIdx * 3 + 2]].xyz;
+        vec3 a = (model*vertices[topology[faceIdx * 3 + 0]]).xyz;
+        vec3 b = (model*vertices[topology[faceIdx * 3 + 1]]).xyz;
+        vec3 c = (model*vertices[topology[faceIdx * 3 + 2]]).xyz;
 
         vec3 point = closestPointOnTriangle(pWS, a, b, c);
         vec3 diff = pWS - point;

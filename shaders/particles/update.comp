@@ -1,0 +1,102 @@
+#version 460 core
+
+layout (local_size_x = 1024) in;
+
+struct particle {
+    vec3 position;
+    vec3 speed;
+    float lastTouch;
+};
+
+layout(std430, binding = 0) buffer ParticleBuffer {
+    particle particles[];
+};
+
+uniform sampler3D sdf;
+uniform mat2x3 boundingBox;
+
+uniform uint particleCount;
+
+uniform float deltaTime;
+uniform float grav;
+uniform float bounce;
+uniform float mag;
+
+const float thicken = 0.02;
+
+uniform vec3 simulationBox;
+
+float pointInBoundingBox(in vec3 p) {
+    vec3 closestPointInBox = clamp(p, boundingBox[0], boundingBox[1]);
+    return distance(p, closestPointInBox);
+}
+
+float sdf_get(vec3 pos) {
+    float inBounds = pointInBoundingBox(pos);
+    vec3 texCoords = (pos - boundingBox[0]) / (boundingBox[1] - boundingBox[0]);
+    
+    vec4 samp = texture(sdf, texCoords);
+    float modelDist = samp.r - thicken;
+    
+    if (inBounds == 0) {
+        return modelDist;
+    } else {
+        return inBounds;
+    }
+}
+
+vec3 gradient(vec3 pos) {
+    float d = 0.01;
+    vec3 texCoords = (pos - boundingBox[0]) / (boundingBox[1] - boundingBox[0]);
+    vec3 gradient = vec3(
+        texture(sdf, texCoords + vec3(d,0.0,0.0)).r - texture(sdf, texCoords - vec3(d,0.0,0.0)).r,
+        texture(sdf, texCoords + vec3(0.0,d,0.0)).r - texture(sdf, texCoords - vec3(0.0,d,0.0)).r,
+        texture(sdf, texCoords + vec3(0.0,0.0,d)).r - texture(sdf, texCoords - vec3(0.0,0.0,d)).r
+    );
+    return normalize(gradient);
+}
+
+void main() {
+    uint pID = gl_GlobalInvocationID.x;
+    if (pID >= particleCount) return;
+
+    particle p = particles[pID];
+
+    float d = sdf_get(p.position);
+    
+    vec3 gradDir = gradient(p.position);
+    
+    if (d < 0.0) {
+        p.position -= gradDir * d;
+        p.speed = bounce * reflect(p.speed, gradDir);
+        p.lastTouch = 0.0;
+    }
+
+    p.speed.y -= deltaTime * grav;
+    p.speed += gradDir * deltaTime * mag;
+    p.position += p.speed * deltaTime;
+    p.lastTouch += deltaTime;
+
+    if (p.position.x < -simulationBox.x) {
+        p.position.x = simulationBox.x;
+        p.lastTouch = 1e10;
+    } else if (p.position.x > simulationBox.x) {
+        p.position.x = -simulationBox.x;
+        p.lastTouch = 1e10;
+    }
+    if (p.position.y < -simulationBox.y) {
+        p.position.y = simulationBox.y;
+        p.speed.y = 0;
+        p.lastTouch = 1e10;
+    }
+    if (p.position.z < -simulationBox.z) {
+        p.position.z = simulationBox.z;
+        p.lastTouch = 1e10;
+    } else if (p.position.z > simulationBox.z) {
+        p.position.z = -simulationBox.z;
+        p.lastTouch = 1e10;
+
+    }
+
+    particles[pID] = p;
+}

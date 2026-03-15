@@ -24,89 +24,19 @@ float lastFrame = 0.0f;
 
 void framebuffer_size_callback(GLFWwindow *window, int width, int height);
 
-// Used to get the entire model into frame when loaded
-float largestBoundDimension = 10;
-glm::vec3 boundsCenter = glm::vec3(0.0);
-
 #include <iostream>
 #include <string>
 #include <cstdlib>
 
 int main(int argc, char **argv)
 {
-	int benchmark = 0;
-	int testSize = 10000;
-	int testStart = 0;
-	int sdf = 128;
+	sdf_conversion::sdfSize = 128;
 
-	for (int i = 1; i < argc; ++i)
-	{
-		std::string arg = argv[i];
-
-		if (arg == "--benchmark")
-		{
-			benchmark = 1;
-		}
-		else if (arg == "--thingy10k")
-		{
-			benchmark = 2;
-		}
-		else if (arg == "--testsize")
-		{
-			if (i + 1 >= argc)
-			{
-				std::cerr << "--testsize requires a value\n";
-				return -1;
-			}
-
-			testSize = std::stoi(argv[++i]); // consume next arg
-			if (testSize > 10000 || testSize < 1)
-			{
-				std::cout << "--testsize must be in between 1 and 10.000" << std::endl;
-				return -2;
-			}
-		}
-		else if (arg == "--sdfsize")
-		{
-			if (i + 1 >= argc)
-			{
-				std::cerr << "--sdfsize requires a value\n";
-				return -1;
-			}
-
-			sdf = std::stoi(argv[++i]); // consume next arg
-			if (benchmark > 0)
-			{
-				std::cout << "Warning: sdfsize is ignored for benchmarking";
-			}
-			if (sdf > 512 || sdf < 1)
-			{
-				std::cout << "--sdfsize must be in between 1 and 512" << std::endl;
-				return -2;
-			}
-		}
-		else if (arg == "--teststart")
-		{
-			if (i + 1 >= argc)
-			{
-				std::cerr << "--teststart requires a value\n";
-				return -1;
-			}
-
-			testStart = std::stoi(argv[++i]); // consume next arg
-			if (testStart > 10000 || testStart < 0)
-			{
-				std::cout << "--teststart must be in between 0 and 10000" << std::endl;
-				return -2;
-			}
-		}
-		else
-		{
-			std::cerr << "Unknown flag " << arg << "\n";
-			return -1;
-		}
-	}
-	sdf_conversion::sdfSize = sdf;
+	unsigned int particleCount = 10000000;
+	float particleSize = 0.01f;
+	glm::vec3 simbox = glm::vec3(2.5);
+	glm::vec3 rotationAxis = glm::vec3(1.0, 1.0, 1.0);
+	float rotationSpeed = 1.0f;
 
 	std::cout << "Initialising openGL... " << std::flush;
 
@@ -116,7 +46,7 @@ int main(int argc, char **argv)
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_SAMPLES, 8);
 
-	GLFWwindow *window = glfwCreateWindow(1, 1, "Mesh2SDF Playground", NULL, NULL);
+	GLFWwindow *window = glfwCreateWindow(1, 1, "Mesh2SDF Playground Particle Demo", NULL, NULL);
 	glfwMaximizeWindow(window);
 
 	if (window == NULL)
@@ -144,14 +74,13 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	glm::mat4 model(0);
+	glm::mat4 model(1.0);
 
 	glEnable(GL_DEPTH_TEST);
 
 	// load shaders
 	std::cout << "\rLoading draw shaders...                 " << std::flush;
-	Shader *shaderRaymarchFlat = new Shader("shaders/raymarch.vs", "shaders/raymarch_tex.fs");
-	Shader *shaderRaster = new Shader("shaders/raster.vs", "shaders/raster.fs");
+	Shader *shaderRaster = new Shader("./shaders/raster.vs", "./shaders/raster.fs");
 
 	std::vector<string> shaderNames = {
 		"RASTERIZE (NO SDF)",
@@ -161,48 +90,13 @@ int main(int argc, char **argv)
 		"RAY MAPS",
 	};
 
-	string activeShader = shaderNames[0];
-
 	std::cout << "\rLoading conversion shaders...                 " << std::flush;
 	sdf_conversion::CompileConversionShaders();
 
-	// False if using cached SDF, True if realtime
-	bool realtimeSDF = false;
-	bool debugPlane = false;
-	GLuint emptySDF;
-	glGenTextures(1, &emptySDF);
-
 	std::map<std::string, Model *> modelMap;
-	std::vector<std::pair<std::string, std::string>> modelsToLoad = {
-		{"CUBE", "./Objs/cube/cube.obj"},
-		{"DONUTS", "./Objs/donuts/donut.obj"},
-		{"DRAGON", "./Objs/dragon/xyzrgb_dragon.obj"},
-		{"LUCY", "./Objs/lucy/lucy.obj"},
-		{"MONKEY", "./Objs/monkey/monkey.obj"},
-		{"PILLOW", "./Objs/pillow/pillow.obj"},
-		{"FLATSCREEN", "./Objs/screen/screen.obj"},
-		{"POT", "./Objs/teapot/utah_teapot.obj"},
-		{"TORUS", "./Objs/torus/torus.obj"},
-	};
-
-	string currentDemoModel = "CUBE";
-	string terminalResponse = "";
-	float terminalResponseTime = 0;
-	unsigned int currentLoadedVerts, currentLoadedFaces;
-	if (benchmark != 2)
-	{
-		int current = 1;
-		for (const auto &[name, path] : modelsToLoad)
-		{
-			std::cout << "\rLoading model " << name << " (" << current++ << "/" << modelsToLoad.size() << ")                   " << std::flush;
-			modelMap[name] = new Model(path, window, shaderNames, name);
-		}
-
-		std::cout << "\r                                             " << std::flush;
-
-		currentLoadedVerts = modelMap[currentDemoModel]->GetModelVertices();
-		currentLoadedFaces = modelMap[currentDemoModel]->GetModelFaces();
-	}
+	Model *demomodel = new Model("./Objs/dragon/xyzrgb_dragon.obj", window, shaderNames, "MONKEY", 0.2f, true);
+	Model *floormodel = new Model("./Objs/screen/screen.obj", window, shaderNames, "FLATSCREEN");
+	std::cout << demomodel->errors << std::endl;
 
 	glEnable(GL_DEBUG_OUTPUT);
 	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
@@ -215,38 +109,59 @@ int main(int argc, char **argv)
 								"LOW",
 								"NOTIFICATION"
 							};
-							std::cerr << "\nGL DEBUG " << severitystring[s] << " SEVERITY: " << message << "\n"
+							std::cerr << "\nGL DEBUG " << severitystring[s] << " SEVERITY: " << message
 									  << std::endl; }, nullptr);
 
-	while (!glfwWindowShouldClose(window) && !benchmark)
+	Shader *particleInit = new Shader("./shaders/particles/init.comp");
+	particleInit->use();
+	GLuint particleBuffer;
+	glGenBuffers(1, &particleBuffer);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, particleBuffer);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, 32 * particleCount, nullptr, GL_DYNAMIC_DRAW);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleBuffer);
+	particleInit->setVec3("spawnCube", simbox);
+	particleInit->setUInt("particleCount", particleCount);
+	float side = ceil(sqrt((float)particleCount));
+	uint groups = (uint)ceil(side / 8.0f);
+	glDispatchCompute(groups, groups, groups);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+	Shader *particleDraw = new Shader("./shaders/particles/p.vs", "./shaders/particles/p.fs");
+
+	GLuint particleVAO;
+	glGenVertexArrays(1, &particleVAO);
+
+	Shader *particleUpdate = new Shader("./shaders/particles/update.comp");
+
+	std::string convMethod = "RAY MAPS";
+
+	while (!glfwWindowShouldClose(window))
 	{
+		if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS)
+		{
+			particleInit->use();
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, particleBuffer);
+			glBufferData(GL_SHADER_STORAGE_BUFFER, 32 * particleCount, nullptr, GL_DYNAMIC_DRAW);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleBuffer);
+			particleInit->setVec3("spawnCube", simbox);
+			particleInit->setUInt("particleCount", particleCount);
+			float side = ceil(sqrt((float)particleCount));
+			uint groups = (uint)ceil(side / 8.0f);
+			glDispatchCompute(groups, groups, groups);
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		}
+
 		// per-frame time logic
 		glEnable(GL_BLEND);
 		float currentFrame = glfwGetTime();
 		deltaTime = currentFrame - lastFrame;
 		lastFrame = currentFrame;
-		glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		int fbWidth, fbHeight;
 		glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
 		glViewport(0, 0, fbWidth, fbHeight);
-
-		// shader switching
-		for (unsigned int i = 0; i < shaderNames.size(); i++)
-		{
-			if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS)
-			{
-				activeShader = shaderNames[i];
-				if (i == 0)
-					debugPlane = false;
-			}
-		}
-
-		// Debug plane is always rasterized
-		Shader *renderShader = (activeShader == shaderNames[0] || debugPlane) ? shaderRaster : shaderRaymarchFlat;
-
-		renderShader->use();
 
 		camera.Orbit(window, deltaTime);
 
@@ -254,56 +169,72 @@ int main(int argc, char **argv)
 		glm::mat4 view = camera.GetViewMatrix();
 		glm::mat4 proj = glm::perspective(glm::radians(45.0f),
 										  static_cast<float>(fbWidth) / static_cast<float>(fbHeight),
-										  0.1f, 10000.0f);
+										  0.1f, 1000.0f);
+		glm::mat4 dmodel = glm::rotate(glm::mat4(1.0f), (float)glfwGetTime() * rotationSpeed, rotationAxis);
 
-		renderShader->setBool("sdfDebug", false);
-		renderShader->setVec3("camera_pos", camera.Position);
-		renderShader->setMat("projection", proj);
-		renderShader->setMat("model", glm::mat4(1.0));
-		renderShader->setVec2("screen_resolution", fbWidth, fbHeight);
-		renderShader->setMat("view", view);
+		shaderRaster->use();
+		shaderRaster->setBool("sdfDebug", false);
+		shaderRaster->setVec3("camera_pos", camera.Position);
+		shaderRaster->setMat("projection", proj);
+		shaderRaster->setMat("model", dmodel);
+		shaderRaster->setVec2("screen_resolution", fbWidth, fbHeight);
+		shaderRaster->setMat("view", view);
+		shaderRaster->setFloat("alpha", 1.0);
 		glm::mat4 invView = glm::inverse(view);
-		renderShader->setMat("inverse_view", invView);
+		shaderRaster->setMat("inverse_view", invView);
+
+		demomodel->Draw(*shaderRaster);
+
+		model = glm::mat4(1.0);
+		model = glm::rotate(model, glm::radians(-90.0f), glm::vec3(1.0, 0.0, 0.0));
+		model = glm::translate(model, glm::vec3(0.0, 0.0, -simbox.x + 0.01));
+		model = glm::scale(model, simbox);
+		shaderRaster->setMat("model", model);
+		floormodel->Draw(*shaderRaster);
+		model = glm::mat4(1.0);
+		model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0, 0.0, 0.0));
+		model = glm::translate(model, glm::vec3(0.0, 0.0, simbox.x));
+		model = glm::scale(model, simbox);
+		shaderRaster->setMat("model", model);
+		floormodel->Draw(*shaderRaster);
 
 		float shaderStart = glfwGetTime();
 
-		// Per shader logic
-		if (!debugPlane)
-		{
-			glEnable(GL_CULL_FACE);
-			if (activeShader == shaderNames[0]) // Rasterizer
-			{
-				renderShader->setInt("sdf", emptySDF);
-				renderShader->setFloat("alpha", 1.0f);
-				modelMap[currentDemoModel]->Draw(*shaderRaster);
-			}
-			else
-			{
-				modelMap[currentDemoModel]->DrawUsingSDF(activeShader, *shaderRaymarchFlat, modelMap["FLATSCREEN"], realtimeSDF);
-			}
-		}
-		else
-		{
-			// Draw debug plane
-			glDisable(GL_CULL_FACE);
-			DebugView::InputHandler(window);
-			shaderRaster->setMat("model", DebugView::planeTransform(modelMap[currentDemoModel]->bounds));
-			shaderRaster->setBool("sdfDebug", true);
-			shaderRaster->setInt("textureSize", sdf_conversion::sdfSize);
-			shaderRaster->setInt("debugAxis", DebugView::debugPlaneAxis);
-			shaderRaster->setFloat("debugHeight", DebugView::getRelativeHeight());
-			shaderRaster->setFloat("alpha", 1.0f);
-			shaderRaster->setFloat("debugLinesInterval", 50 / largestBoundDimension);
+		// Conversion und Particles
+		((sdf_conversion::RaymapConversion *)demomodel->methods[convMethod])->model = dmodel;
+		demomodel->methods[convMethod]->PrepareSDF(false);
 
-			modelMap[currentDemoModel]->LoadSDFIntoShader(modelMap[currentDemoModel]->methods[activeShader]->sdf, *shaderRaster, true);
+		particleUpdate->use();
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleBuffer);
+		glActiveTexture(GL_TEXTURE15);
+		GLuint sdfTexID = demomodel->GetSDFByName(convMethod);
+		glBindTexture(GL_TEXTURE_3D, sdfTexID);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
-			modelMap["FLATSCREEN"]->Draw(*shaderRaster);
+		particleUpdate->setInt("sdf", 15);
+		particleUpdate->SetMat2x3("boundingBox", demomodel->bounds);
+		particleUpdate->setUInt("particleCount", particleCount);
+		particleUpdate->setFloat("deltaTime", deltaTime);
+		particleUpdate->setFloat("grav", 0.0f);
+		particleUpdate->setFloat("bounce", 0.5f);
+		particleUpdate->setFloat("mag", -0.5f);
+		particleUpdate->setVec3("simulationBox", simbox);
+		uint groups = (particleCount + 1023) / 1024;
+		glDispatchCompute(groups, 1, 1);
 
-			shaderRaster->setMat("model", glm::mat4(1.0));
-			shaderRaster->setBool("sdfDebug", false);
-			shaderRaster->setFloat("alpha", 0.2f);
-			modelMap[currentDemoModel]->Draw(*shaderRaster);
-		}
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+
+		particleDraw->use();
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleBuffer);
+		particleDraw->setMat("view", view);
+		particleDraw->setMat("projection", proj);
+		particleDraw->setFloat("size", particleSize);
+		glBindVertexArray(particleVAO);
+		glDrawArrays(GL_POINTS, 0, particleCount);
 
 		// Sync up with GPU for time measurement
 		glFinish();
@@ -320,171 +251,13 @@ int main(int argc, char **argv)
 		SimpleText::drawBox(fbWidth, fbHeight, glm::vec4(0.0, 0.0, 0.5, 0.5), 10, 10, fbWidth - 2 * 10, 10);
 		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0), perfText, 10, 10, 10, 0.9);
 
-		// Current shader display
-		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), activeShader, 20, 10, 30, 0.9);
-
-		// Don't show for rasterizer
-		if (activeShader != shaderNames[0])
-		{
-			if (!debugPlane)
-			{
-				if (realtimeSDF)
-					SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "REALTIME", 20, fbWidth - 150, 30, 0.9);
-				else
-					SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "CACHED", 20, fbWidth - 120, 30, 0.9);
-			}
-			else
-				SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "DEBUG", 20, fbWidth - 120, 30, 0.9);
-		}
-
 		// Current model info
-		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "MODELNAME: " + currentDemoModel, 10, 10, fbHeight - 20, 0.9);
-		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "VERTICES: " + readableInt(currentLoadedVerts), 10, 10, fbHeight - 35, 0.9);
-		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "FACES: " + readableInt(currentLoadedFaces), 10, 10, fbHeight - 50, 0.9);
-		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "SDF SIZE: " + std::to_string(sdf_conversion::sdfSize), 10, 10, fbHeight - 65, 0.9);
-
-		// Terminal handling
-		const int terminalWidth = fbWidth * 0.5;
-		const int terminalPadding = fbWidth * 0.25;
-		string command = SimpleText::terminal(window, fbWidth, fbHeight, glm::vec4(1.0), glm::vec4(0.0, 0.0, 0.5, 0.5), terminalPadding, fbHeight - 20, terminalWidth, 10);
-		if (command == "EXIT")
-		{
-			glfwSetWindowShouldClose(window, true);
-		}
-		else if (command.substr(0, 4) == "LOAD")
-		{
-			if (command.size() > 5)
-			{
-				string newModel = command.substr(5);
-				if (modelMap.find(newModel) != modelMap.end())
-				{
-					currentDemoModel = newModel;
-
-					float largest = modelMap[newModel]->bounds[1][0] - modelMap[newModel]->bounds[0][0];
-					largest = max(modelMap[newModel]->bounds[1][1] - modelMap[newModel]->bounds[0][1], largest);
-					largest = max(modelMap[newModel]->bounds[1][2] - modelMap[newModel]->bounds[0][2], largest);
-					largestBoundDimension = largest;
-					boundsCenter = {
-						modelMap[newModel]->bounds[1][0] + modelMap[newModel]->bounds[0][0],
-						modelMap[newModel]->bounds[1][1] + modelMap[newModel]->bounds[0][1],
-						modelMap[newModel]->bounds[1][2] + modelMap[newModel]->bounds[0][2],
-					};
-					boundsCenter *= 0.5;
-					camera.OrbitDistance = largestBoundDimension * 2;
-					camera.YOffset = boundsCenter.y;
-					currentLoadedVerts = modelMap[currentDemoModel]->GetModelVertices();
-					currentLoadedFaces = modelMap[currentDemoModel]->GetModelFaces();
-					terminalResponse = "MODEL LOADED";
-				}
-				else
-				{
-					std::cout << "Unknown model name " << newModel << std::endl;
-					terminalResponse = "UNKNOWN MODEL NAME";
-				}
-				terminalResponseTime = currentFrame;
-			}
-		}
-		else if (command == "RECALC")
-		{
-			if (activeShader == shaderNames[0])
-			{
-				terminalResponse = "SHADER CANNOT RECALC";
-				terminalResponseTime = currentFrame;
-			}
-			else
-			{
-				debugPlane = false;
-				modelMap[currentDemoModel]->methods[activeShader]->sdf_ready = false;
-			}
-		}
-		else if (command == "REALTIME")
-		{
-			realtimeSDF = true;
-			terminalResponse = "SWITCHED TO REALTIME CALCULATION";
-			terminalResponseTime = currentFrame;
-			debugPlane = false;
-		}
-		else if (command == "CACHED")
-		{
-			realtimeSDF = false;
-			terminalResponse = "SWITCHED TO CACHED SDFS";
-			terminalResponseTime = currentFrame;
-			debugPlane = false;
-		}
-		else if (command == "DEBUG")
-		{
-			if (activeShader == shaderNames[0])
-			{
-				terminalResponse = "NO SDF TO DEBUG";
-			}
-			else
-			{
-				realtimeSDF = false;
-				terminalResponse = "SWITCHED TO DEBUG VIEW";
-				debugPlane = true;
-			}
-			terminalResponseTime = currentFrame;
-		}
-		else if (command == "HELP")
-		{
-			terminalResponse = "AVAILABLE COMMANDS: EXIT LOAD RECALC REALTIME CACHED";
-			terminalResponseTime = currentFrame;
-		}
-		else if (command != "")
-		{
-			std::cout << "Unknown command " << command << std::endl;
-			terminalResponse = "UNKNOWN COMMAND - HELP FOR AVAILABLE COMMANDS";
-			terminalResponseTime = currentFrame;
-		}
-
-		if (currentFrame - terminalResponseTime < 3.0f)
-		{
-			SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0), terminalResponse, 10, 500, fbHeight - 40, 1);
-		}
+		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "PARTICLE COUNT: " + readableInt(particleCount), 10, 10, fbHeight - 20, 0.9);
+		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "SDF SIZE: " + std::to_string(sdf_conversion::sdfSize), 10, 10, fbHeight - 35, 0.9);
+		SimpleText::drawText(fbWidth, fbHeight, glm::vec4(1.0, 1.0, 1.0, 0.2), "MODEL FACES: " + readableInt(demomodel->GetModelFaces()), 10, 10, fbHeight - 50, 0.9);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
-	}
-
-	if (benchmark > 0)
-	{
-		using namespace tinyjson;
-		std::cout << "\nBenchmarking mode activated\nCompiling metrics...";
-		sdf_conversion::metric::CompileMetricShaders();
-
-		objectnode *root = new objectnode();
-
-		objectnode *sysinfo = new objectnode("system information");
-		auto *gpuname = new valuenode<std::string>("gpu name", sysinfo::getGPUName());
-		sysinfo->child = gpuname;
-		auto *cpuname = new valuenode<std::string>("cpu name", sysinfo::getCPUName());
-		gpuname->next = cpuname;
-		auto *ramsize = new valuenode<std::string>("ram size", sysinfo::getRAMGB());
-		cpuname->next = ramsize;
-
-		objectnode *benchmarkroot = new objectnode("benchmark results");
-
-		root->child = sysinfo;
-		sysinfo->next = benchmarkroot;
-
-		double totalTime = 0.0;
-
-		if (benchmark == 1) // Default models
-			benchmarking::DefaultIterator(modelMap, shaderNames, benchmarkroot, totalTime);
-		else // Thingy10k
-		{
-			for (auto &[name, model] : modelMap)
-			{
-				delete model;
-			}
-			int skipCount = benchmarking::FileIterator(shaderNames, benchmarkroot, window, totalTime, testSize, testStart);
-			std::cout << "\nSkipped " << skipCount << " files due to errors." << std::endl;
-		}
-
-		std::string output_path = "./output/benchmark_results.json";
-		WriteToFile(*root, output_path);
-		std::cout << "\nBenchmark results saved to " << output_path << std::endl;
-		std::cout << "Finished in " << std::fixed << std::setprecision(0) << totalTime << " seconds" << std::endl;
 	}
 
 	std::cout << "\nExit!" << std::endl;

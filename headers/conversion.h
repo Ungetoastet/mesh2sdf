@@ -158,7 +158,7 @@ namespace sdf_conversion
 
     /// @brief Generates the SDF in chunks and merges them. Returns the final, merged sdf
     /// @return gl texture id of the generated texture
-    static unsigned int GenerateSDF_Naive(unsigned int ssbo_vertex, unsigned int ssbo_index, glm::mat2x3 &boundingBox, unsigned int topologyLength, GLFWwindow *window)
+    static unsigned int GenerateSDF_Naive(unsigned int ssbo_vertex, unsigned int ssbo_index, glm::mat2x3 &boundingBox, unsigned int topologyLength, GLFWwindow *window, glm::mat4 model)
     {
         SetupConversionShader(shaderSDFNaive, ssbo_vertex, ssbo_index, boundingBox, topologyLength);
 
@@ -169,6 +169,8 @@ namespace sdf_conversion
         // Calculate the number of workgroups needed in each dimension
         int localSize = 8;
         GLuint numGroups = (sdfSize + localSize - 1) / localSize;
+
+        shaderSDFNaive->setMat("model", model);
 
         for (unsigned int topoIndexStart = 0; topoIndexStart < topologyLength; topoIndexStart += topologyChunksSize)
         {
@@ -304,10 +306,8 @@ namespace sdf_conversion
         return writeSDF;
     }
 
-    static unsigned int GenerateSDF_Raymap(unsigned int ssbo_vertex, unsigned int ssbo_index, glm::mat2x3 &boundingBox, unsigned int topologyLength, GLFWwindow *window)
+    static unsigned int GenerateSDF_Raymap(unsigned int ssbo_vertex, unsigned int ssbo_index, glm::mat2x3 &boundingBox, unsigned int topologyLength, GLFWwindow *window, glm::mat4 model)
     {
-        const uint totalSteps = 16;
-
         const unsigned long int numElements = sdfSize * sdfSize * sdfSize;
 
         // --- 1) Voxelisation - Count Intersections
@@ -324,12 +324,12 @@ namespace sdf_conversion
             nullptr);
 
         SetupConversionShader(shaderRMIntersectCount, ssbo_vertex, ssbo_index, boundingBox, topologyLength, true);
+        shaderRMIntersectCount->setMat("model", model);
 
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, intersectBuffer);
 
         GLuint numGroups = (topologyLength / 64) + 1;
 
-        printProgress(0, totalSteps, "Voxelization", window);
         DispatchAndWait(numGroups, 1, 1);
 
         // --- 2) Blelloch scan full
@@ -403,7 +403,6 @@ namespace sdf_conversion
 
         // --- 5) Find required size and reserve space
 
-        printProgress(4, totalSteps, "Get size", window);
         uint32_t reqSize;
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, intersectBuffer);
         glGetBufferSubData(
@@ -420,15 +419,14 @@ namespace sdf_conversion
         // --- 6) Intersect with indeces
 
         SetupConversionShader(shaderRMIndexing, ssbo_vertex, ssbo_index, boundingBox, topologyLength, true);
+        shaderRMIndexing->setMat("model", model);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, intersectBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, indexBuffer);
         numGroups = (topologyLength + 63) / 64;
-        printProgress(5, totalSteps, "Voxelization 2", window);
         DispatchAndWait(numGroups, 1, 1);
 
         // --- 7) Initialize Distances
 
-        printProgress(6, totalSteps, "Close distances", window);
         GLuint distanceBuffer;
         glGenBuffers(1, &distanceBuffer);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, distanceBuffer);
@@ -439,6 +437,7 @@ namespace sdf_conversion
         glBufferData(GL_SHADER_STORAGE_BUFFER, numElements * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
 
         SetupConversionShader(shaderRMDistInit, ssbo_vertex, ssbo_index, boundingBox, topologyLength, true);
+        shaderRMDistInit->setMat("model", model);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, intersectBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, indexBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, distanceBuffer);
@@ -465,26 +464,22 @@ namespace sdf_conversion
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, faceIDBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, faceIDBufferOut);
         shaderRMDistTransform->setUInt("sweepDimension", 0);
-        printProgress(7, totalSteps, "Distance Transform X", window);
         DispatchAndWait(sdfSize, sdfSize, 1); // X sweep
 
         shaderRMDistTransform->setFloat("invVoxelSizeSq", 1.0 / sqVoxelSize.y);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, faceIDBufferOut);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, faceIDBuffer);
         shaderRMDistTransform->setUInt("sweepDimension", 1);
-        printProgress(8, totalSteps, "Distance Transform Y", window);
         DispatchAndWait(sdfSize, sdfSize, 1); // Y sweep
 
         shaderRMDistTransform->setFloat("invVoxelSizeSq", 1.0 / sqVoxelSize.z);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, faceIDBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, faceIDBufferOut);
         shaderRMDistTransform->setUInt("sweepDimension", 2);
-        printProgress(9, totalSteps, "Distance Transform Z", window);
         DispatchAndWait(sdfSize, sdfSize, 1); // Z sweep
 
         // --- 9) Transform buffers into 3D tex, also pulls sqrt from the distances
 
-        printProgress(10, totalSteps, "Buffer to Texture", window);
         shaderRMBuffer2SDF->use();
         shaderRMBuffer2SDF->setUInt("textureSize", sdfSize);
         GLuint sdf = InitSDF();
@@ -497,13 +492,12 @@ namespace sdf_conversion
 
         // --- 10) Distance cleanup
 
-        printProgress(11, totalSteps, "Distance Cleanup", window);
         SetupConversionShader(shaderRMDistClean, ssbo_vertex, ssbo_index, boundingBox, topologyLength, false);
+        shaderRMDistClean->setMat("model", model);
         DispatchAndWait(numGroups, numGroups, numGroups);
 
         // --- 11) raymap local intersects
 
-        printProgress(12, totalSteps, "Local Raycasts", window);
         GLuint raymapLocal;
         glGenTextures(1, &raymapLocal);
         glBindTexture(GL_TEXTURE_3D, raymapLocal);
@@ -512,6 +506,7 @@ namespace sdf_conversion
         glClearTexImage(raymapLocal, 0, GL_RGBA_INTEGER, GL_INT, clearValue);
 
         SetupConversionShader(shaderRMLocalIntersect, ssbo_vertex, ssbo_index, boundingBox, topologyLength, true);
+        shaderRMLocalIntersect->setMat("model", model);
         shaderRMLocalIntersect->setVec3("voxelSize", voxelSize);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, intersectBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, indexBuffer);
@@ -532,7 +527,6 @@ namespace sdf_conversion
 
         // --- 12) Raymap accumulate
 
-        printProgress(13, totalSteps, "Building Raymap", window);
         shaderRMIntersectAccumulate->use();
         shaderRMIntersectAccumulate->setInt("textureSize", sdfSize);
         glBindImageTexture(0, raymapLocal, 0, GL_TRUE, 0, GL_READ_WRITE, GL_RGBA32I);
@@ -545,7 +539,6 @@ namespace sdf_conversion
 
         // --- 13) Raymap initial cut count
 
-        printProgress(14, totalSteps, "Sign Determination Preparation", window);
         shaderRMInitCuts->use();
         glBindImageTexture(0, raymapLocal, 0, GL_TRUE, 0, GL_READ_ONLY, GL_RGBA32I);
         glBindImageTexture(1, sdf, 0, GL_TRUE, 0, GL_READ_WRITE, GL_RGBA32F);
@@ -553,7 +546,6 @@ namespace sdf_conversion
 
         // --- 14) Sign determination vote
 
-        printProgress(15, totalSteps, "Sign Determination Vote", window);
         shaderRMSignDet->use();
         glBindImageTexture(0, raymapLocal, 0, GL_TRUE, 0, GL_READ_ONLY, GL_RGBA32I);
         glBindImageTexture(1, sdf, 0, GL_TRUE, 0, GL_READ_WRITE, GL_RGBA32F);
@@ -561,14 +553,12 @@ namespace sdf_conversion
 
         // --- 15) Clean up
 
-        printProgress(16, totalSteps, "Cleanup", window);
         glDeleteTextures(1, &raymapLocal);
         glDeleteBuffers(1, &intersectBuffer);
         glDeleteBuffers(1, &indexBuffer);
         glDeleteBuffers(1, &distanceBuffer);
         glDeleteBuffers(1, &faceIDBuffer);
         glDeleteBuffers(1, &faceIDBufferOut);
-        clearProgress(window);
 
         return sdf;
     }

@@ -42,14 +42,14 @@ public:
     map<std::string, sdf_conversion::ConversionMethod *> methods;
 
     // constructor, expects a filepath to a 3D model.
-    Model(string const &path, GLFWwindow *window, std::vector<string> &methodNames, string modelname, float boundsPadding = 0.1f, bool gamma = false) : gammaCorrection(gamma)
+    Model(string const &path, GLFWwindow *window, std::vector<string> &methodNames, string modelname, float boundsPadding = 0.1f, bool cubicBB = false, bool gamma = false) : gammaCorrection(gamma)
     {
         this->errors = !loadModel(path);
         if (this->errors)
             return;
         this->boundsPadding = boundsPadding;
         this->window = window;
-        bounds = calculateBoundingBox(boundsPadding);
+        bounds = calculateBoundingBox(boundsPadding, cubicBB);
         prepareSSBOs();
 
         methods = {
@@ -214,38 +214,42 @@ private:
     /// @brief
     /// @param boundsPadding by what ratio to stretch the bounding box
     /// @return
-    glm::mat2x3 calculateBoundingBox(float boundsPadding)
+    glm::mat2x3 calculateBoundingBox(float boundsPadding, bool cubic)
     {
-        float *b = new float[6];
-        float *lower = b;
-        float *upper = b + 3;
+        // Start with first vertex
+        glm::vec3 lower = meshes[0].vertices[0].Position;
+        glm::vec3 upper = meshes[0].vertices[0].Position;
 
-        memcpy(lower, &meshes[0].vertices[0].Position, sizeof(glm::vec3));
-        memcpy(upper, &meshes[0].vertices[0].Position, sizeof(glm::vec3));
-
-        for (int i = 0; i < (int)meshes.size(); i++)
+        // Find overall lower and upper bounds
+        for (size_t i = 0; i < meshes.size(); i++)
         {
             glm::mat2x3 meshBounds = meshes[i].calculateBoundingBox();
-            lower[0] = min(lower[0], meshBounds[0][0]);
-            lower[1] = min(lower[1], meshBounds[0][1]);
-            lower[2] = min(lower[2], meshBounds[0][2]);
-            upper[0] = max(upper[0], meshBounds[1][0]);
-            upper[1] = max(upper[1], meshBounds[1][1]);
-            upper[2] = max(upper[2], meshBounds[1][2]);
+            lower = glm::min(lower, meshBounds[0]);
+            upper = glm::max(upper, meshBounds[1]);
         }
 
-        glm::vec3 stretch = (glm::vec3(upper[0], upper[1], upper[2]) - glm::vec3(lower[0], lower[1], lower[2]));
+        glm::vec3 stretch = upper - lower;
+
         this->maxExtends = max(stretch[0], max(stretch[1], stretch[2]));
-        stretch *= boundsPadding / 2;
 
-        lower[0] -= stretch[0];
-        lower[1] -= stretch[1];
-        lower[2] -= stretch[2];
-        upper[0] += stretch[0];
-        upper[1] += stretch[1];
-        upper[2] += stretch[2];
+        // If cubic, extend all sides to the max dimension
+        if (cubic)
+        {
+            float maxLength = this->maxExtends;
+            glm::vec3 center = (lower + upper) * 0.5f;
+            lower = center - glm::vec3(maxLength * 0.5f);
+            upper = center + glm::vec3(maxLength * 0.5f);
+            stretch = glm::vec3(maxLength); // for padding later
+        }
 
-        glm::mat2x3 boundingBox = glm::make_mat2x3(b);
+        // Apply padding
+        glm::vec3 padding = stretch * (boundsPadding / 2.0f);
+        lower -= padding;
+        upper += padding;
+
+        glm::mat2x3 boundingBox;
+        boundingBox[0] = lower;
+        boundingBox[1] = upper;
         return boundingBox;
     }
 

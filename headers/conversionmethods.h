@@ -55,9 +55,10 @@ namespace sdf_conversion
     {
     public:
         NaiveConversion(unsigned int ssbo_vertex, unsigned int ssbo_index, glm::mat2x3 &bounding_box, unsigned int topology_length, GLFWwindow *window, std::string &modelname) : ConversionMethod(ssbo_vertex, ssbo_index, bounding_box, topology_length, window, "naive", modelname) {};
+        glm::mat4 model;
         void GenerateSDF() override
         {
-            this->sdf = sdf_conversion::GenerateSDF_Naive(ssbo_vertex, ssbo_index, bounding_box, topology_length, window);
+            this->sdf = sdf_conversion::GenerateSDF_Naive(ssbo_vertex, ssbo_index, bounding_box, topology_length, window, model);
         }
     };
 
@@ -85,9 +86,10 @@ namespace sdf_conversion
     {
     public:
         RaymapConversion(unsigned int ssbo_vertex, unsigned int ssbo_index, glm::mat2x3 &bounding_box, unsigned int topology_length, GLFWwindow *window, std::string &modelname) : ConversionMethod(ssbo_vertex, ssbo_index, bounding_box, topology_length, window, "raymap", modelname) {};
+        glm::mat4 model;
         void GenerateSDF() override
         {
-            this->sdf = GenerateSDF_Raymap(ssbo_vertex, ssbo_index, bounding_box, topology_length, window);
+            this->sdf = GenerateSDF_Raymap(ssbo_vertex, ssbo_index, bounding_box, topology_length, window, model);
         }
     };
 }
