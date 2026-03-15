@@ -1,0 +1,25 @@
+#version 460 core
+
+layout (local_size_x = 1024) in;
+
+layout(std430, binding=0) buffer IntersectBuffer{
+    uint intersectCounts[];
+};
+
+layout(std430, binding=1) buffer BlockOffsetBuffer{
+    uint blockOffsets[];
+};
+
+uniform uint totalSize;
+
+void main(){
+    uint gid = gl_GlobalInvocationID.x;
+
+    if(gid >= totalSize)
+        return;
+
+    uint blockSize = 2048u;
+    uint blockId = gid / blockSize;
+
+    intersectCounts[gid] += blockOffsets[blockId];
+}

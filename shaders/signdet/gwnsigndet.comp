@@ -1,0 +1,84 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout (binding = 0, rgba32f) uniform image3D sdfTex;
+
+uniform int textureSize;
+
+uniform uint topologyIndexStart;
+uniform uint topologyIndexEnd;
+uniform uint topologyLength;
+
+
+uniform mat2x3 boundingBox;
+
+layout(std430, binding = 1) buffer VertexBuffer {
+    vec4 vertices[];
+};
+
+layout(std430, binding = 2) buffer TopologyBuffer {
+    uint topology[];
+};
+
+const float INV_FOUR_PI = 0.07957747154594767; // 1 / (4π)
+
+float solidAngleTriangle(vec3 p, vec3 a, vec3 b, vec3 c)
+{
+    vec3 ra = a - p;
+    vec3 rb = b - p;
+    vec3 rc = c - p;
+
+    float la = length(ra);
+    float lb = length(rb);
+    float lc = length(rc);
+
+    float numerator = dot(ra, cross(rb, rc));
+    float denominator =
+        la * lb * lc +
+        dot(ra, rb) * lc +
+        dot(rb, rc) * la +
+        dot(rc, ra) * lb;
+
+    return 2.0 * atan(numerator, denominator);
+}
+
+void main()
+{
+    ivec3 voxelCoord = ivec3(gl_GlobalInvocationID.xyz);
+    vec4 oldData = imageLoad(sdfTex, voxelCoord);
+
+    vec3 normalizedPos = (vec3(voxelCoord) + 0.5) / vec3(textureSize);
+    vec3 worldPos = mix(boundingBox[0], boundingBox[1], normalizedPos);
+
+    float winding = 0.0;
+
+    if (topologyIndexStart != 0) {
+        winding = oldData.y;
+    }
+
+    // iterate only assigned triangle range
+    for (uint i = topologyIndexStart; i < topologyIndexEnd; i += 3u) {
+        uint ia = topology[i + 0u];
+        uint ib = topology[i + 1u];
+        uint ic = topology[i + 2u];
+
+        vec3 a = vertices[ia].xyz;
+        vec3 b = vertices[ib].xyz;
+        vec3 c = vertices[ic].xyz;
+
+        float omega = solidAngleTriangle(worldPos, a, b, c);
+        winding += omega * INV_FOUR_PI;
+    }
+
+    // robust inside test for GWN
+    if (topologyIndexEnd == topologyLength) {
+        bool inside = (winding > 0.1);
+
+        if (inside) {
+            imageStore(sdfTex, voxelCoord, vec4(-oldData.x, oldData.yzw));
+        }
+    } else {
+        imageStore(sdfTex, voxelCoord, vec4(oldData.x, winding, oldData.zw));
+    }
+}

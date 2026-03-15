@@ -1,0 +1,116 @@
+#version 460 core
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+uniform uint textureSize;
+uniform uint sweepDimension; // 0=X, 1=Y, 2=Z
+uniform float invVoxelSizeSq; 
+
+layout(std430, binding=0) buffer DistanceBuffer { float g[]; };
+layout(std430, binding=1) buffer NNFInBuffer    { int nnfin[]; };
+layout(std430, binding=2) buffer NNFOutBuffer   { int nnfout[]; };
+
+// Registers/Local memory for the line
+float vals[1024];
+int v[1024];
+float z[1025];
+
+uint getGlobalIndex(uint x, uint y, uint zc) {
+    return x + y * textureSize + zc * textureSize * textureSize;
+}
+
+uvec3 lineCoord(uint i, uint a, uint b) {
+    if(sweepDimension == 0) return uvec3(i, a, b); // Sweep X (a=y, b=z)
+    if(sweepDimension == 1) return uvec3(a, i, b); // Sweep Y (a=x, b=z)
+    return uvec3(a, b, i);                         // Sweep Z (a=x, b=y)
+}
+
+void main() {
+    // FIX: Combine X and Y to get the unique line in the 3D volume
+    uint lineIdx = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * textureSize;
+    
+    if (lineIdx >= (textureSize * textureSize)) return;
+
+    uint a = gl_GlobalInvocationID.x;
+    uint b = gl_GlobalInvocationID.y;
+    uint n = textureSize;
+
+    // 1. Copy global line data into local memory
+    bool lineHasSeed = false;
+    for(uint i = 0u; i < n; ++i) {
+        uvec3 c = lineCoord(i, a, b);
+        float val = g[getGlobalIndex(c.x, c.y, c.z)];
+        vals[i] = val;
+        if (val < 1e19) lineHasSeed = true;
+    }
+
+    // If the entire line is infinity, no need to compute; just pass it through
+    if (!lineHasSeed) {
+        for(uint q = 0u; q < n; ++q) {
+            uvec3 outc = lineCoord(q, a, b);
+            uint pout = getGlobalIndex(outc.x, outc.y, outc.z);
+            nnfout[pout] = nnfin[pout]; // Or -1
+        }
+        return;
+    }
+
+    // 2. Compute Lower Envelope
+    int k = 0;
+    v[0] = 0;
+    z[0] = -1e20;
+    z[1] = 1e20;
+
+    for(int q = 1; q < int(n); ++q) {
+        float fq = vals[q];
+        if (fq >= 1e19) continue; 
+
+        // If the starting parabola was infinity, replace it with the first valid seed
+        if (vals[v[k]] >= 1e19) {
+            v[k] = q;
+            continue;
+        }
+
+        while(k >= 0) {
+            int vk = v[k];
+            float fvk = vals[vk];
+            
+            // Intersection formula normalized to grid space
+            float s = ((fq * invVoxelSizeSq + float(q*q)) - (fvk * invVoxelSizeSq + float(vk*vk))) / 
+                      (2.0 * (float(q) - float(vk)));
+
+            if(s <= z[k]) {
+                k--;
+            } else {
+                k++;
+                v[k] = q;
+                z[k] = s;
+                z[k+1] = 1e20;
+                break;
+            }
+        }
+        if (k < 0) { k = 0; v[0] = q; z[0] = -1e20; z[1] = 1e20; }
+    }
+
+    // 3. Retrieval pass
+    int current_k = 0;
+    for(uint q = 0u; q < n; ++q) {
+        while(z[current_k+1] < float(q)) {
+            current_k++;
+        }
+
+        int vk = v[current_k];
+        float gridDistSq = float((int(q)-vk)*(int(q)-vk));
+        
+        // Convert grid-distance back to world-space squared and add seed value
+        float worldDistSq = (gridDistSq / invVoxelSizeSq) + vals[vk];
+
+        uvec3 outc = lineCoord(q, a, b);
+        uint pout = getGlobalIndex(outc.x, outc.y, outc.z);
+
+        g[pout] = worldDistSq;
+
+        uvec3 nnc = lineCoord(uint(vk), a, b);
+        uint pnn = getGlobalIndex(nnc.x, nnc.y, nnc.z);
+        nnfout[pout] = nnfin[pnn];
+    }
+}

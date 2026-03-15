@@ -1,0 +1,30 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout (binding=0, rgba32i) uniform readonly iimage3D raymap;
+layout (binding=1, rgba32f) uniform image3D sdf;
+
+// HELPERS
+
+float get_c0(ivec3 p) {
+    ivec3 res = imageSize(raymap);
+    ivec3 pos = imageLoad(raymap, p).rgb;
+    
+    ivec3 neg;
+    neg.x = imageLoad(raymap, ivec3(res.x - 1, p.yz)).x - pos.x;
+    neg.y = imageLoad(raymap, ivec3(p.x, res.y - 1, p.z)).y - pos.y;
+    neg.z = imageLoad(raymap, ivec3(p.xy, res.z - 1)).z - pos.z;
+
+    return float(abs(pos.x) + abs(neg.x) + abs(pos.y) + abs(neg.y) + abs(pos.z) + abs(neg.z));
+}
+
+void main() {
+    ivec3 vox = ivec3(gl_GlobalInvocationID.xyz);
+
+    float c_total = get_c0(vox);
+
+    vec4 dat = imageLoad(sdf, vox);
+    dat.y = c_total; 
+    imageStore(sdf, vox, dat);
+}

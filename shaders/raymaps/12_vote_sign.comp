@@ -1,0 +1,57 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout (binding=0, rgba32i) uniform readonly iimage3D raymap;
+layout (binding=1, rgba32f) uniform image3D sdf;
+
+// HELPERS
+
+float get_c0(ivec3 p) {
+    return imageLoad(sdf, p).y;
+}
+
+int segX(int x1, int x2, int y, int z) { return imageLoad(raymap, ivec3(x2, y, z)).x - imageLoad(raymap, ivec3(x1, y, z)).x; }
+int segY(int y1, int y2, int x, int z) { return imageLoad(raymap, ivec3(x, y2, z)).y - imageLoad(raymap, ivec3(x, y1, z)).y; }
+int segZ(int z1, int z2, int x, int y) { return imageLoad(raymap, ivec3(x, y, z2)).z - imageLoad(raymap, ivec3(x, y, z1)).z; }
+
+void main() {
+    ivec3 vox = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 res = imageSize(raymap);
+
+    float c_total = get_c0(vox);
+    float n_total = 6.0;
+
+    for (int dz = -1; dz <= 1; dz += 2) {
+        for (int dy = -1; dy <= 1; dy += 2) {
+            for (int dx = -1; dx <= 1; dx += 2) {
+                ivec3 q = vox + ivec3(dx, dy, dz);
+                if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, res))) continue;
+
+                float cq = get_c0(q);
+                int sx = vox.x, ex = q.x;
+                int sy = vox.y, ey = q.y;
+                int sz = vox.z, ez = q.z;
+
+                int w_sum = 0;
+                w_sum += (segX(sx, ex, sy, sz) + segY(sy, ey, ex, sz) + segZ(sz, ez, ex, ey));
+                w_sum += (segX(sx, ex, sy, sz) + segZ(sz, ez, ex, sy) + segY(sy, ey, ex, ez));
+                w_sum += (segY(sy, ey, sx, sz) + segX(sx, ex, ey, sz) + segZ(sz, ez, ey, ex));
+                w_sum += (segY(sy, ey, sx, sz) + segZ(sz, ez, sx, ey) + segX(sx, ex, ey, ez));
+                w_sum += (segZ(sz, ez, sx, sy) + segX(sx, ex, sy, ez) + segY(sy, ey, ex, ez));
+                w_sum += (segZ(sz, ez, sx, sy) + segY(sy, ey, sx, ez) + segX(sx, ex, ey, ez));
+
+                c_total += (6.0 * float(w_sum)) + (6.0 * cq);
+                n_total += (6.0 * 6.0); 
+            }
+        }
+    }
+
+    float averageWinding = abs(c_total) / n_total;
+
+    if (averageWinding > 0.5) {
+        vec4 dat = imageLoad(sdf, vox);
+        dat.x *= -1.0; 
+        imageStore(sdf, vox, dat);
+    }
+}

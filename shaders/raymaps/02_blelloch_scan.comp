@@ -1,0 +1,81 @@
+#version 460 core
+
+layout (local_size_x = 1024) in;
+
+layout(std430, binding=0) buffer IntersectBuffer{
+    uint intersectCounts[];
+};
+
+layout(std430, binding=1) buffer BlockSumBuffer{
+    uint blockSums[];
+};
+
+uniform uint totalSize;
+uniform bool writeBlockSums;
+
+// HELPERS
+uint nextPow2(uint x) {
+    x -= 1u;
+    x |= x >> 1u;
+    x |= x >> 2u;
+    x |= x >> 4u;
+    x |= x >> 8u;
+    x |= x >> 16u;
+    return x + 1u;
+}
+
+shared uint temp[2048]; 
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_WorkGroupID.x;
+    uint offset = 2u * gl_WorkGroupSize.x * gid;
+
+    // Load into shared memory
+    if (offset + 2u*tid < totalSize)
+        temp[2*tid] = intersectCounts[offset + 2*tid];
+    else
+        temp[2*tid] = 0u;
+
+    if (offset + 2u*tid+1u < totalSize)
+        temp[2*tid+1] = intersectCounts[offset + 2*tid+1];
+    else
+        temp[2*tid+1] = 0u;
+
+    barrier();
+
+    // ---- Upsweep (reduce) ----
+    uint n = nextPow2(2u * gl_WorkGroupSize.x);
+    for (uint d = 1u; d < n; d <<= 1u) {
+        barrier();
+        uint k = (tid+1u) * d * 2u - 1u;
+        if (k < n)
+            temp[k] += temp[k - d];
+    }
+
+    if (tid == 0) {
+        if(writeBlockSums)
+            blockSums[gid] = temp[n - 1u];
+
+        temp[n - 1u] = 0u;
+    }
+
+    // ---- Downsweep ----
+    for (uint d = n>>1u; d > 0u; d >>= 1u) {
+        barrier();
+        uint k = (tid+1u) * d * 2u - 1u;
+        if (k < n) {
+            uint t = temp[k - d];
+            temp[k - d] = temp[k];
+            temp[k] += t;
+        }
+    }
+
+    barrier();
+
+    // Write back to SSBO
+    if (offset + 2u*tid < totalSize)
+        intersectCounts[offset + 2*tid] = temp[2*tid];
+    if (offset + 2u*tid+1u < totalSize)
+        intersectCounts[offset + 2*tid+1] = temp[2*tid+1];
+}

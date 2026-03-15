@@ -1,0 +1,61 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// rgb = seed world pos | a = faceID (-1 = empty)
+layout (binding = 0, rgba32f) uniform readonly image3D srcTex;
+layout (binding = 1, rgba32f) uniform writeonly image3D dstTex;
+
+uniform int textureSize;
+uniform int jump;
+
+uniform mat2x3 boundingBox;
+
+// voxel center → world space
+vec3 voxelCenterWS(ivec3 v) {
+    vec3 n = (vec3(v) + 0.5) / float(textureSize);
+    return mix(boundingBox[0], boundingBox[1], n);
+}
+
+float dist2(vec3 a, vec3 b) {
+    vec3 d = a - b;
+    return dot(d, d);
+}
+
+void main() {
+    ivec3 p = ivec3(gl_GlobalInvocationID.xyz);
+    if (any(greaterThanEqual(p, ivec3(textureSize)))) return;
+
+    vec4 best = imageLoad(srcTex, p);
+    vec3 pWS = voxelCenterWS(p);
+
+    float bestD = (best.w >= 0.0)
+        ? dist2(pWS, best.xyz)
+        : 1e30;
+
+    // 26-neighborhood
+    for (int z = -1; z <= 1; ++z) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                if (x == 0 && y == 0 && z == 0) continue;
+
+                ivec3 q = p + ivec3(x,y,z) * jump;
+                if (any(lessThan(q, ivec3(0))) ||
+                    any(greaterThanEqual(q, ivec3(textureSize)))) {
+                    continue;
+                }
+
+                vec4 candidate = imageLoad(srcTex, q);
+                if (candidate.a < 0.0) continue;
+
+                float d = dist2(pWS, candidate.xyz);
+                if (d < bestD) {
+                    bestD = d;
+                    best = candidate;
+                }
+            }
+        }
+    }
+
+    imageStore(dstTex, p, best);
+}

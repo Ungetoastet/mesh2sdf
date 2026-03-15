@@ -1,0 +1,125 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+uniform uint textureSize;
+uniform mat2x3 boundingBox;
+uniform ivec3 offset;
+uniform vec3 voxelSize;
+
+layout(std430, binding = 1) readonly buffer VertexBuffer {
+    vec4 vertices[];
+};
+layout(std430, binding = 2) readonly buffer TopologyBuffer {
+    uint topology[];
+};
+layout(std430, binding=0) buffer IntersectBuffer {
+    uint accIntersects[];
+};
+layout(std430, binding=3) buffer IndexBuffer {
+    uint indices[]; 
+};
+layout (binding=4, rgba32i) uniform iimage3D raymap;
+
+// HELPERS
+vec3 voxelCenterWS(ivec3 v) {
+    vec3 n = (vec3(v) + 0.5) / float(textureSize);
+    return mix(boundingBox[0], boundingBox[1], n);
+}
+
+uint getGlobalIndex(ivec3 voxPos) {
+    return uint(voxPos.x) + uint(voxPos.y) * textureSize + uint(voxPos.z) * textureSize * textureSize;
+}
+
+const float EPSILON = 1e-6;
+int intersectTriangle(vec3 rayOrigin, vec3 rayDir, vec3 v0, vec3 v1, vec3 v2, out float hitDist) {
+    vec3 edge1 = v1 - v0;
+    vec3 edge2 = v2 - v0;
+
+    vec3 pvec = cross(rayDir, edge2);
+    float det = dot(edge1, pvec);
+
+    hitDist = 0;
+
+    // If det is near 0, the ray is parallel to the triangle
+    if (abs(det) < EPSILON) {
+        return 0;
+    }
+
+    float invDet = 1.0 / det;
+
+    vec3 tvec = rayOrigin - v0;
+    float u = dot(tvec, pvec) * invDet;
+    if (u < -EPSILON || u > 1.0 + EPSILON) {
+        return 0;
+    }
+
+    vec3 qvec = cross(tvec, edge1);
+    float v = dot(rayDir, qvec) * invDet;
+    if (v < -EPSILON || u + v > 1.0 + EPSILON) {
+        return 0;
+    }
+
+    float t = dot(edge2, qvec) * invDet;
+
+    // Calculate the world-space hit point
+    hitDist = t;
+    
+    // Return 1 for front-face hit, -1 for back-face hit
+    return (det > 0.0) ? 1 : -1;
+}
+
+void main() {
+    ivec3 vox = (ivec3(gl_GlobalInvocationID.xyz) * 2) + offset;
+
+    uint gI = getGlobalIndex(vox);
+    vec3 pWS = voxelCenterWS(vox);
+
+    uint startIndex = (gI == 0) ? 0 : accIntersects[gI - 1];
+    uint endIndex = accIntersects[gI];
+
+    ivec4 change = ivec4(0);
+
+    for (uint dirIdx = 0; dirIdx < 3; dirIdx++) {
+        float maxDist = voxelSize[dirIdx] / 2.0;
+        
+        vec3 dir = vec3(0.0);
+        dir[dirIdx] = 1.0;
+
+        ivec3 neighbor = vox - ivec3(dir);
+        ivec4 nchange = ivec4(0);
+
+        for (uint i = startIndex; i < endIndex; i++) {
+            uint faceIdx = indices[i]; 
+            
+            vec3 a = vertices[topology[faceIdx * 3 + 0]].xyz;
+            vec3 b = vertices[topology[faceIdx * 3 + 1]].xyz;
+            vec3 c = vertices[topology[faceIdx * 3 + 2]].xyz;
+
+            float hitDist;
+            int intersect = intersectTriangle(pWS, dir, a, b, c, hitDist);
+
+            if (intersect == 0) {
+                continue;
+            }
+
+            if (abs(hitDist) > maxDist) { 
+                // Hit is outside the current voxel
+                continue;
+            }
+
+            if (hitDist < 0) { 
+                // Write into previous voxel
+                nchange[dirIdx] = intersect;
+            } else {
+                change[dirIdx] += intersect;
+            }
+        }
+
+        ivec4 neighborVal = imageLoad(raymap, neighbor);
+        imageStore(raymap, neighbor, neighborVal + nchange);
+    }
+
+    ivec4 oldVals = imageLoad(raymap, vox);
+    imageStore(raymap, vox, oldVals + change);
+}

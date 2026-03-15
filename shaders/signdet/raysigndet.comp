@@ -1,0 +1,80 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout (binding = 0, rgba32f) uniform image3D sdfTex;
+
+uniform int textureSize;
+
+uniform uint topologyIndexStart;
+uniform uint topologyIndexEnd;
+
+uniform mat2x3 boundingBox;
+layout(std430, binding=1) readonly buffer VertexBuffer {
+    vec4 vertices[];
+};
+layout(std430, binding=2) readonly buffer TopologyBuffer {
+    uint topology[];
+};
+
+const float EPSILON = 1e-6;
+
+// RAYCASTING FOR SIGN DETERMINATION
+bool intersectTriangle(vec3 rayOrigin, vec3 rayDir, vec3 v0, vec3 v1, vec3 v2) {
+    vec3 edge1 = v1 - v0;
+    vec3 edge2 = v2 - v0;
+
+    vec3 pvec = cross(rayDir, edge2);
+    float det = dot(edge1, pvec);
+
+    if (abs(det) < EPSILON) return false;
+
+    float invDet = 1.0 / det;
+
+    vec3 tvec = rayOrigin - v0;
+    float u = dot(tvec, pvec) * invDet;
+    if (u < -EPSILON || u > 1.0 + EPSILON) return false;
+
+    vec3 qvec = cross(tvec, edge1);
+    float v = dot(rayDir, qvec) * invDet;
+    if (v < -EPSILON || u + v > 1.0 + EPSILON) return false;
+
+    float t = dot(edge2, qvec) * invDet;
+
+    return t > EPSILON; 
+}
+
+int countIntersections(vec3 pos, vec3 rayDir) {
+    int hitCount = 0;
+    
+    for (uint i = topologyIndexStart; i < topologyIndexEnd; i+=3) {
+        uint ia = topology[i + 0u];
+        uint ib = topology[i + 1u];
+        uint ic = topology[i + 2u];
+
+        vec3 a = (vertices[ia]).xyz;
+        vec3 b = (vertices[ib]).xyz;
+        vec3 c = (vertices[ic]).xyz;
+
+        if (intersectTriangle(pos, rayDir, a, b, c)) {
+            hitCount++;
+        }
+    }
+
+    return hitCount;
+}
+
+void main() {
+    ivec3 voxelCoord = ivec3(gl_GlobalInvocationID.xyz);
+
+    vec3 normalizedPos = (vec3(voxelCoord) + 0.5) / vec3(textureSize);
+    vec3 worldPos = ((boundingBox[1] - boundingBox[0]) * normalizedPos) + boundingBox[0];
+
+    int intersections = countIntersections(worldPos, vec3(0.0, 1.0, 0.0));
+
+    if ((intersections & 1u) != 0) {
+        vec4 oldData = imageLoad(sdfTex, voxelCoord);
+        float newdist = -oldData.x;
+        imageStore(sdfTex, voxelCoord, vec4(newdist, oldData.yzw));
+    }
+}

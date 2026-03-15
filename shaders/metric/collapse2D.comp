@@ -1,0 +1,22 @@
+// Collapse the y-Axis into the x-Axis (0)
+#version 460 core
+layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0, rgba32f) uniform image3D metric;
+
+uniform int textureSize;
+
+void main() {
+    int p = int(gl_GlobalInvocationID.x);
+    if (p >= textureSize) return;
+    
+    vec4 acc = vec4(0.0);
+
+    for (int y = 0; y <= textureSize; y++) {
+        vec4 cellData = imageLoad(metric, ivec3(p, y, 0));
+        acc.rba += cellData.rba;
+        acc.g = max(acc.g, cellData.g);
+    }
+
+    imageStore(metric, ivec3(p, 0, 0), acc);
+}

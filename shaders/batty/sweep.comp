@@ -1,0 +1,96 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout (binding = 0, rgba32f) uniform readonly image3D sdfIn;
+layout (binding = 1, rgba32f) uniform writeonly image3D sdfOut;
+
+uniform int textureSize;
+uniform mat2x3 boundingBox;
+
+struct Neighbor {
+    float dist;
+    float h;   
+    float attr;  
+};
+
+void main() {
+    ivec3 p = ivec3(gl_GlobalInvocationID.xyz);
+    if (any(greaterThanEqual(p, ivec3(textureSize)))) return;
+
+    vec4 currentData = imageLoad(sdfIn, p);
+    vec3 h = (boundingBox[1] - boundingBox[0]) / float(textureSize);
+
+    // 1. For each axis, pick the neighbor with the smaller distance
+    vec4 nXneg = (p.x > 0) ? imageLoad(sdfIn, p - ivec3(1, 0, 0)) : vec4(1e20);
+    vec4 nXpos = (p.x < textureSize-1) ? imageLoad(sdfIn, p + ivec3(1, 0, 0)) : vec4(1e20);
+    
+    vec4 nYneg = (p.y > 0) ? imageLoad(sdfIn, p - ivec3(0, 1, 0)) : vec4(1e20);
+    vec4 nYpos = (p.y < textureSize-1) ? imageLoad(sdfIn, p + ivec3(0, 1, 0)) : vec4(1e20);
+    
+    vec4 nZneg = (p.z > 0) ? imageLoad(sdfIn, p - ivec3(0, 0, 1)) : vec4(1e20);
+    vec4 nZpos = (p.z < textureSize-1) ? imageLoad(sdfIn, p + ivec3(0, 0, 1)) : vec4(1e20);
+
+    Neighbor nb[3];
+    nb[0] = (nXneg.r < nXpos.r) ? Neighbor(nXneg.r, h.x, nXneg.a) : Neighbor(nXpos.r, h.x, nXpos.a);
+    nb[1] = (nYneg.r < nYpos.r) ? Neighbor(nYneg.r, h.y, nYneg.a) : Neighbor(nYpos.r, h.y, nYpos.a);
+    nb[2] = (nZneg.r < nZpos.r) ? Neighbor(nZneg.r, h.z, nZneg.a) : Neighbor(nZpos.r, h.z, nZpos.a);
+
+    // 2. Sort neighbors by distance (nb[0] is smallest distance)
+    // This is required for the iterative Eikonal solver
+    if (nb[0].dist > nb[1].dist) { Neighbor t=nb[0]; nb[0]=nb[1]; nb[1]=t; }
+    if (nb[1].dist > nb[2].dist) { Neighbor t=nb[1]; nb[1]=nb[2]; nb[2]=t; }
+    if (nb[0].dist > nb[1].dist) { Neighbor t=nb[0]; nb[0]=nb[1]; nb[1]=t; }
+
+    // 3. Solve Eikonal equation: sum[ max(0, (d - d_i)/h_i )^2 ] = 1
+    // Start with 1D propagation (most likely case)
+    float d = nb[0].dist + nb[0].h;
+    float attr = nb[0].attr;
+
+    // Try 2D propagation
+    if (d > nb[1].dist) {
+        float h0_2 = nb[0].h * nb[0].h;
+        float h1_2 = nb[1].h * nb[1].h;
+        
+        float A = 1.0/h0_2 + 1.0/h1_2;
+        float B = -2.0 * (nb[0].dist/h0_2 + nb[1].dist/h1_2);
+        float C = (nb[0].dist*nb[0].dist)/h0_2 + (nb[1].dist*nb[1].dist)/h1_2 - 1.0;
+        
+        float disc = B*B - 4.0*A*C;
+        if (disc >= 0.0) {
+            float d2 = (-B + sqrt(disc)) / (2.0*A);
+            if (d2 > nb[1].dist) {
+                d = d2;
+                // Attribute propagates from the neighbor with smallest value
+                attr = nb[0].attr; 
+            }
+        }
+    }
+
+    // Try 3D propagation
+    if (d > nb[2].dist) {
+        float h0_2 = nb[0].h * nb[0].h;
+        float h1_2 = nb[1].h * nb[1].h;
+        float h2_2 = nb[2].h * nb[2].h;
+        
+        float A = 1.0/h0_2 + 1.0/h1_2 + 1.0/h2_2;
+        float B = -2.0 * (nb[0].dist/h0_2 + nb[1].dist/h1_2 + nb[2].dist/h2_2);
+        float C = (nb[0].dist*nb[0].dist)/h0_2 + (nb[1].dist*nb[1].dist)/h1_2 + (nb[2].dist*nb[2].dist)/h2_2 - 1.0;
+        
+        float disc = B*B - 4.0*A*C;
+        if (disc >= 0.0) {
+            float d3 = (-B + sqrt(disc)) / (2.0*A);
+            if (d3 > nb[2].dist) {
+                d = d3;
+            }
+        }
+    }
+
+    // 4. Update if the new calculated distance is smaller
+    if (d < currentData.r) {
+        currentData.r = d;
+        currentData.a = attr;
+    }
+
+    imageStore(sdfOut, p, currentData);
+}

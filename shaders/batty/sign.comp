@@ -1,0 +1,23 @@
+#version 460 core
+
+layout (local_size_x = 1, local_size_y = 8, local_size_z = 8) in;
+
+layout (binding = 0, rgba32f) uniform image3D sdf;
+layout (binding = 1, r32ui) uniform readonly uimage3D intersectTex;
+
+uniform int textureSize;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.yz);
+    if (any(greaterThanEqual(p, ivec2(textureSize)))) return;
+
+    uint intersectCounter = 0;
+
+    for (int x = 0; x < textureSize; x++) {
+        vec4 currentData = imageLoad(sdf, ivec3(x, p));
+        intersectCounter += imageLoad(intersectTex, ivec3(x, p)).r;
+        if ((intersectCounter&1u) == 1u) {
+            imageStore(sdf, ivec3(x, p), vec4(-currentData.r, currentData.gba));
+        }
+    }
+}

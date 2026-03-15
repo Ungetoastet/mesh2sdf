@@ -1,0 +1,89 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+uniform uint textureSize; 
+uniform mat2x3 boundingBox;
+
+layout(std430, binding=0) buffer IntersectBuffer {
+    uint accIntersects[];
+};
+layout(std430, binding=1) readonly buffer VertexBuffer {
+    vec4 vertices[];
+};
+layout(std430, binding=2) readonly buffer TopologyBuffer {
+    uint topology[];
+};
+layout(std430, binding=3) buffer IndexBuffer {
+    uint indices[]; 
+};
+layout(std430, binding=4) buffer DistBuffer {
+    float voxDistances[]; // Output: World Space Squared Distance
+};
+layout(std430, binding=5) buffer IDBuffer {
+    int closestFaceIDs[]; // Output: Seed Face ID
+};
+
+uint getGlobalIndex(ivec3 voxPos) {
+    return uint(voxPos.x) + uint(voxPos.y) * textureSize + uint(voxPos.z) * textureSize * textureSize;
+}
+
+vec3 closestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
+    vec3 ab = b - a; vec3 ac = c - a; vec3 ap = p - a;
+    float d1 = dot(ab, ap); float d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) return a; 
+    vec3 bp = p - b; float d3 = dot(ab, bp); float d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) return b; 
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) return a + ab * (d1 / (d1 - d3));
+    vec3 cp = p - c; float d5 = dot(ab, cp); float d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) return c; 
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) return a + ac * (d2 / (d2 - d6));
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+        float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + (c - b) * w;
+    }
+    float denom = 1.0 / (va + vb + vc);
+    return a + ab * (vb * denom) + ac * (vc * denom);
+}
+
+vec3 voxelCenterWS(ivec3 v) {
+    vec3 n = (vec3(v) + 0.5) / float(textureSize);
+    return mix(boundingBox[0], boundingBox[1], n);
+}
+
+void main() {
+    ivec3 vox = ivec3(gl_GlobalInvocationID.xyz);
+    if (any(greaterThanEqual(vox, ivec3(textureSize)))) return;
+
+    uint gI = getGlobalIndex(vox);
+    vec3 pWS = voxelCenterWS(vox);
+
+    uint startIndex = (gI == 0) ? 0 : accIntersects[gI - 1];
+    uint endIndex = accIntersects[gI];
+
+    float smallestDistSq = 1e20;
+    int smallestFaceID = -1;
+
+    for (uint i = startIndex; i < endIndex; i++) {
+        uint faceIdx = indices[i]; 
+        
+        vec3 a = vertices[topology[faceIdx * 3 + 0]].xyz;
+        vec3 b = vertices[topology[faceIdx * 3 + 1]].xyz;
+        vec3 c = vertices[topology[faceIdx * 3 + 2]].xyz;
+
+        vec3 point = closestPointOnTriangle(pWS, a, b, c);
+        vec3 diff = pWS - point;
+        float d2 = dot(diff, diff);
+
+        if (d2 < smallestDistSq) {
+            smallestDistSq = d2;
+            smallestFaceID = int(faceIdx);
+        }
+    }
+
+    voxDistances[gI] = smallestDistSq;
+    closestFaceIDs[gI] = smallestFaceID;
+}

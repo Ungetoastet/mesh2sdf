@@ -1,0 +1,176 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// x = dist, y = winding num, z = unused, w = faceID
+layout (binding = 0, rgba32f) uniform image3D destTex;
+
+uniform int textureSize;
+
+uniform uint topologyIndexStart;
+uniform uint topologyIndexEnd;
+
+uniform uint topologyLength;
+
+// MESH DATA
+uniform mat2x3 boundingBox;
+layout(std430, binding=1) readonly buffer VertexBuffer {
+    vec4 vertices[];
+};
+layout(std430, binding=2) readonly buffer TopologyBuffer {
+    uint topology[];
+};
+
+// HELPER FUNCTIONS
+struct face{
+    vec3 a, b, c;
+};
+
+// CONSTANTS
+const float INV_FOUR_PI = 0.07957747154594767; // 1 / (4π)
+
+vec3 closestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
+    vec3 ab = b - a;
+    vec3 ac = c - a;
+    vec3 ap = p - a;
+
+    float d1 = dot(ab, ap);
+    float d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) return a; 
+
+    vec3 bp = p - b;
+    float d3 = dot(ab, bp);
+    float d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) return b; 
+
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        float v = d1 / (d1 - d3);
+        return a + ab * v;
+    }
+
+    vec3 cp = p - c;
+    float d5 = dot(ab, cp);
+    float d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) return c; 
+
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        float w = d2 / (d2 - d6);
+        return a + ac * w;
+    }
+
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+        if (abs((d4 - d3) + (d5 - d6)) < 1e-6) return b; 
+        float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + (c - b) * w;
+    }
+
+    float denom = 1.0 / (va + vb + vc);
+    float v = vb * denom;
+    float w = vc * denom;
+    return a + ab * v + ac * w;
+}
+
+float distanceToFace(in vec3 point, in face f, out vec3 pointOnFace) {
+    vec3 cp = closestPointOnTriangle(point, f.a, f.b, f.c);
+    pointOnFace = cp; 
+    return length(point - cp);
+}
+
+vec3 barycentric(vec3 p, vec3 a, vec3 b, vec3 c) {
+    vec3 v0 = b - a;
+    vec3 v1 = c - a;
+    vec3 v2 = p - a;
+
+    float d00 = dot(v0, v0);
+    float d01 = dot(v0, v1);
+    float d11 = dot(v1, v1);
+    float d20 = dot(v2, v0);
+    float d21 = dot(v2, v1);
+
+    float denom = d00 * d11 - d01 * d01;
+    float v = (d11 * d20 - d01 * d21) / denom;
+    float w = (d00 * d21 - d01 * d20) / denom;
+
+    return vec3(1.0 - v - w, v, w);
+}
+
+float solidAngleTriangle(vec3 p, face f)
+{
+    vec3 ra = f.a - p;
+    vec3 rb = f.b - p;
+    vec3 rc = f.c - p;
+
+    float la = length(ra);
+    float lb = length(rb);
+    float lc = length(rc);
+
+    float numerator = dot(ra, cross(rb, rc));
+    float denominator =
+        la * lb * lc +
+        dot(ra, rb) * lc +
+        dot(rb, rc) * la +
+        dot(rc, ra) * lb;
+
+    return 2.0 * atan(numerator, denominator);
+}
+
+void main()
+{
+    ivec3 voxelCoord = ivec3(gl_GlobalInvocationID.xyz);
+    vec4 old = imageLoad(destTex, voxelCoord);
+
+    vec3 normalizedPos = (vec3(voxelCoord) + 0.5) / vec3(textureSize);
+    vec3 worldPos = mix(boundingBox[0], boundingBox[1], normalizedPos);
+
+    // initialize from previous pass if needed
+    float winding = (topologyIndexStart == 0u) ? 0.0 : old.y;
+    float bestDist = (topologyIndexStart == 0u) ? 1e10 : old.x;
+    uint bestFace = (topologyIndexStart == 0u) ? 0u : uint(old.w);
+
+    float localWinding = 0.0;
+    float localMinDist = 1e10;
+    uint localBestFace = 0u;
+
+    // iterate assigned triangle range
+    for (uint i = topologyIndexStart; i < topologyIndexEnd; i += 3u)
+    {
+        uint ia = topology[i + 0u];
+        uint ib = topology[i + 1u];
+        uint ic = topology[i + 2u];
+
+        face f;
+        f.a = vertices[ia].xyz;
+        f.b = vertices[ib].xyz;
+        f.c = vertices[ic].xyz;
+
+        vec3 pof;
+        float d = distanceToFace(worldPos, f, pof);
+
+        if (d < localMinDist) {
+            localMinDist = d;
+            localBestFace = i / 3u;
+        }
+
+        float omega = solidAngleTriangle(worldPos, f);
+        localWinding += omega * INV_FOUR_PI;
+    }
+
+    if (localMinDist < bestDist) {
+        bestDist = localMinDist;
+        bestFace = localBestFace;
+    }
+
+    winding += localWinding;
+
+    if (topologyIndexEnd == topologyLength)
+    {
+        bool inside = (winding > 0.1);
+        if (inside) {
+            bestDist = -bestDist;
+        }
+    }
+    imageStore(destTex, voxelCoord, vec4(bestDist, winding, 0.0, float(bestFace)));
+}

@@ -1,0 +1,30 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout (binding = 0, rgba32f) uniform writeonly image3D sdfTex;
+
+layout(std430, binding=1) buffer DistBuffer{
+    float distances[];
+};
+
+layout(std430, binding=2) buffer FaceIDBuffer{
+    int faceIDs[];
+};
+
+uniform uint textureSize; 
+
+uint globalIndex(ivec3 voxPos) {
+    return voxPos.x + voxPos.y * textureSize + voxPos.z * textureSize * textureSize;
+}
+
+void main() {
+    ivec3 voxCoord = ivec3(gl_GlobalInvocationID.xyz);
+    if (any(greaterThanEqual(voxCoord, ivec3(textureSize)))) return;
+
+    uint gi = globalIndex(voxCoord);
+    float val = sqrt(distances[gi]);
+    int faceID = faceIDs[gi];
+
+    imageStore(sdfTex, voxCoord, vec4(val, 0.0, 0.0, float(faceID)));
+}
