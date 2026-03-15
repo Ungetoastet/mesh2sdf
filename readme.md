@@ -41,5 +41,5 @@ Use `python plot.py` to generate some visualisations from the data.
 
 ## Demo
 
-A particle simulation has been implemented to test real-time performance. Check out the `particles` branch or [this video](https://youtu.be/JpyzwV0IOsw?si=0scliGlMmfCziREG).
+A particle simulation has been implemented to test real-time performance. Check out the [particles](https://github.com/Ungetoastet/mesh2sdf/tree/particles) branch or [this video](https://youtu.be/JpyzwV0IOsw?si=0scliGlMmfCziREG).
 
